@@ -72,7 +72,13 @@ def safe_name(name: str) -> str:
 
 def cache_path(name: str, kind: str) -> Path:
     CACHE_DIR.mkdir(exist_ok=True)
-    return CACHE_DIR / f"{safe_name(name)}_{kind}_cache.json"
+    sname = safe_name(name)
+    # An unnamed user shares the notebook's unprefixed cache files
+    # (cache/topic_cache.json, cache/company_cache.json); named users
+    # still get their own isolated, prefixed caches.
+    if sname == "default":
+        return CACHE_DIR / f"{kind}_cache.json"
+    return CACHE_DIR / f"{sname}_{kind}_cache.json"
 
 
 def load_cache(path: Path) -> dict:
@@ -147,6 +153,21 @@ def build_tech_tokens(text: str) -> tuple[WordCloud, list[tuple[str, int]]]:
         collocations=False,
     ).generate(tech_text)
     return wc, tech_freq.most_common(20)
+
+
+def heading_with_run_button(title: str, key: str, help_text: str) -> bool:
+    """Render a subheader with an inline '▶ Run inference' button. Returns True if clicked."""
+    col_title, col_btn = st.columns([4, 1])
+    with col_title:
+        st.subheader(title)
+    with col_btn:
+        st.write("")  # vertical spacer to align the button with the heading
+        return st.button(
+            "▶ Run inference",
+            key=key,
+            use_container_width=True,
+            help=help_text,
+        )
 
 
 def add_total_annotations(fig, totals) -> None:
@@ -531,110 +552,136 @@ def main() -> None:
 
     # ── Topic classification ──────────────────────────────────────────────────
     if show_topics:
-        st.subheader("Topic Classification")
+        run_inference = heading_with_run_button(
+            "Topic Classification",
+            key="run_topics",
+            help_text=(
+                "Classify any posts not yet cached with the selected LLM. "
+                "Runs only when clicked."
+            ),
+        )
         df_posts = df["ShareCommentary"].dropna().reset_index(drop=True)
         cp = cache_path(user_name, "topic")
         topic_cache = load_cache(cp)
 
         uncached = [i for i in range(len(df_posts)) if str(i) not in topic_cache]
-        if uncached:
-            st.info(f"Classifying {len(uncached)} uncached posts with **{active_model}**…")
-            print(f"[{active_model}] Starting topic classification for {len(uncached)} posts...")
-            bar = st.progress(0, text="Starting…")
-            status = st.empty()
-            start_time = time.time()
-            for idx, i in tqdm(enumerate(uncached), total=len(uncached), desc="Classifying posts"):
-                t0 = time.time()
-                topic_cache[str(i)] = classify_topic(df_posts.iloc[i], active_model)
-                elapsed = time.time() - t0
-                status.text(f"Post {i}: {elapsed:.1f}s | Processing {idx + 1}/{len(uncached)}…")
-                print(f"  Post {i}: {elapsed:.1f}s")
-                if idx % 5 == 0 or idx == len(uncached) - 1:
-                    save_cache(cp, topic_cache)
-                pct = (idx + 1) / len(uncached)
-                bar.progress(pct, text=f"Topic classification: {idx + 1}/{len(uncached)}")
-            save_cache(cp, topic_cache)
-            total_time = time.time() - start_time
-            print(f"Done in {total_time:.1f}s")
-            bar.empty()
-            status.empty()
+        if uncached and not run_inference:
+            st.warning(
+                f"{len(uncached)} of {len(df_posts)} posts not yet classified. "
+                f"Click **▶ Run inference** above to classify them with **{active_model}**."
+            )
+        else:
+            if uncached:
+                st.info(f"Classifying {len(uncached)} uncached posts with **{active_model}**…")
+                print(f"[{active_model}] Starting topic classification for {len(uncached)} posts...")
+                bar = st.progress(0, text="Starting…")
+                status = st.empty()
+                start_time = time.time()
+                for idx, i in tqdm(enumerate(uncached), total=len(uncached), desc="Classifying posts"):
+                    t0 = time.time()
+                    topic_cache[str(i)] = classify_topic(df_posts.iloc[i], active_model)
+                    elapsed = time.time() - t0
+                    status.text(f"Post {i}: {elapsed:.1f}s | Processing {idx + 1}/{len(uncached)}…")
+                    print(f"  Post {i}: {elapsed:.1f}s")
+                    if idx % 5 == 0 or idx == len(uncached) - 1:
+                        save_cache(cp, topic_cache)
+                    pct = (idx + 1) / len(uncached)
+                    bar.progress(pct, text=f"Topic classification: {idx + 1}/{len(uncached)}")
+                save_cache(cp, topic_cache)
+                total_time = time.time() - start_time
+                print(f"Done in {total_time:.1f}s")
+                bar.empty()
+                status.empty()
 
-        topic_labels = [topic_cache.get(str(i), "Other") for i in range(len(df_posts))]
-        topic_counts = pd.Series(topic_labels).value_counts().reset_index()
-        topic_counts.columns = ["topic", "count"]
+            topic_labels = [topic_cache.get(str(i), "Other") for i in range(len(df_posts))]
+            topic_counts = pd.Series(topic_labels).value_counts().reset_index()
+            topic_counts.columns = ["topic", "count"]
 
-        fig = px.bar(
-            topic_counts, x="topic", y="count",
-            title=f"LinkedIn Posts by Topic (Total: {len(df_posts)})",
-            color="topic",
-            text="count",
-        )
-        fig.update_layout(
-            xaxis_title="Topic",
-            yaxis_title="Number of Posts",
-            showlegend=False,
-            xaxis_tickangle=-30,
-            bargap=0.2,
-        )
-        fig.update_traces(textposition="outside")
-        st.plotly_chart(fig, use_container_width=True)
+            fig = px.bar(
+                topic_counts, x="topic", y="count",
+                title=f"LinkedIn Posts by Topic (Total: {len(df_posts)})",
+                color="topic",
+                text="count",
+            )
+            fig.update_layout(
+                xaxis_title="Topic",
+                yaxis_title="Number of Posts",
+                showlegend=False,
+                xaxis_tickangle=-30,
+                bargap=0.2,
+            )
+            fig.update_traces(textposition="outside")
+            st.plotly_chart(fig, use_container_width=True)
 
     # ── Company mentions ──────────────────────────────────────────────────────
     if show_companies:
-        st.subheader("Company Mentions")
+        run_inference = heading_with_run_button(
+            "Company Mentions",
+            key="run_companies",
+            help_text=(
+                "Extract companies from any posts not yet cached with the "
+                "selected LLM. Runs only when clicked."
+            ),
+        )
         df_orgs = df["ShareCommentary"].dropna().reset_index(drop=True)
         cp = cache_path(user_name, "company")
         company_cache = load_cache(cp)
 
         uncached = [i for i in range(len(df_orgs)) if str(i) not in company_cache]
-        if uncached:
-            st.info(f"Extracting companies from {len(uncached)} uncached posts with **{active_model}**…")
-            print(f"[{active_model}] Starting company extraction for {len(uncached)} posts...")
-            bar = st.progress(0, text="Starting…")
-            status = st.empty()
-            start_time = time.time()
-            for idx, i in tqdm(enumerate(uncached), total=len(uncached), desc="Extracting companies"):
-                t0 = time.time()
-                company_cache[str(i)] = extract_companies(df_orgs.iloc[i], active_model)
-                elapsed = time.time() - t0
-                status.text(f"Post {i}: {elapsed:.1f}s | Processing {idx + 1}/{len(uncached)}…")
-                print(f"  Post {i}: {elapsed:.1f}s")
-                if idx % 5 == 0 or idx == len(uncached) - 1:
-                    save_cache(cp, company_cache)
-                pct = (idx + 1) / len(uncached)
-                bar.progress(pct, text=f"Company extraction: {idx + 1}/{len(uncached)}")
-            save_cache(cp, company_cache)
-            total_time = time.time() - start_time
-            print(f"Done in {total_time:.1f}s")
-            bar.empty()
-            status.empty()
+        if uncached and not run_inference:
+            st.warning(
+                f"{len(uncached)} of {len(df_orgs)} posts not yet processed. "
+                f"Click **▶ Run inference** above to extract companies with **{active_model}**."
+            )
+        else:
+            if uncached:
+                st.info(f"Extracting companies from {len(uncached)} uncached posts with **{active_model}**…")
+                print(f"[{active_model}] Starting company extraction for {len(uncached)} posts...")
+                bar = st.progress(0, text="Starting…")
+                status = st.empty()
+                start_time = time.time()
+                for idx, i in tqdm(enumerate(uncached), total=len(uncached), desc="Extracting companies"):
+                    t0 = time.time()
+                    company_cache[str(i)] = extract_companies(df_orgs.iloc[i], active_model)
+                    elapsed = time.time() - t0
+                    status.text(f"Post {i}: {elapsed:.1f}s | Processing {idx + 1}/{len(uncached)}…")
+                    print(f"  Post {i}: {elapsed:.1f}s")
+                    if idx % 5 == 0 or idx == len(uncached) - 1:
+                        save_cache(cp, company_cache)
+                    pct = (idx + 1) / len(uncached)
+                    bar.progress(pct, text=f"Company extraction: {idx + 1}/{len(uncached)}")
+                save_cache(cp, company_cache)
+                total_time = time.time() - start_time
+                print(f"Done in {total_time:.1f}s")
+                bar.empty()
+                status.empty()
 
-        org_counter: Counter = Counter()
-        for orgs in company_cache.values():
-            for org in orgs:
-                org_name = org.strip()
-                if len(org_name) > 1:
-                    org_counter[org_name] += 1
+            org_counter: Counter = Counter()
+            for orgs in company_cache.values():
+                for org in orgs:
+                    org_name = org.strip()
+                    if len(org_name) > 1:
+                        org_counter[org_name] += 1
 
-        top_n = 30
-        top_orgs = pd.DataFrame(org_counter.most_common(top_n), columns=["org", "count"])
+            top_n = 30
+            top_orgs = pd.DataFrame(org_counter.most_common(top_n), columns=["org", "count"])
 
-        fig = px.bar(
-            top_orgs.sort_values("count"), x="count", y="org",
-            orientation="h",
-            title=f"Top {top_n} Companies/Organisations Mentioned in Posts",
-            text="count",
-            color="count",
-            color_continuous_scale="Blues",
-        )
-        fig.update_layout(
-            xaxis_title="Mentions",
-            yaxis_title="",
-            coloraxis_showscale=False,
-            height=800,
-        )
-        fig.update_traces(textposition="outside")
-        st.plotly_chart(fig, use_container_width=True)
+            fig = px.bar(
+                top_orgs.sort_values("count"), x="count", y="org",
+                orientation="h",
+                title=f"Top {top_n} Companies/Organisations Mentioned in Posts",
+                text="count",
+                color="count",
+                color_continuous_scale="Blues",
+            )
+            fig.update_layout(
+                xaxis_title="Mentions",
+                yaxis_title="",
+                coloraxis_showscale=False,
+                height=800,
+            )
+            fig.update_traces(textposition="outside")
+            st.plotly_chart(fig, use_container_width=True)
 
 
 if __name__ == "__main__":
