@@ -1,5 +1,8 @@
+import io
 import json
 import threading
+import time
+import zipfile
 from collections import Counter
 from pathlib import Path
 
@@ -9,30 +12,23 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from wordcloud import WordCloud, STOPWORDS
 from nltk.corpus import stopwords as nltk_stopwords
 from nltk.tokenize import word_tokenize
 from nltk import pos_tag
 
+# ── Load config ────────────────────────────────────────────────────────────────
+
+CONFIG_FILE = Path(__file__).parent / "config" / "settings.json"
+CONFIG = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-DATA_DIR = Path("data")
-CACHE_DIR = Path("cache")
-DEFAULT_MODEL = "qwen2.5:14b"
-
-TOPICS = [
-    "Technology & Engineering",
-    "AI & Machine Learning",
-    "Career & Jobs",
-    "Leadership & Management",
-    "Entrepreneurship & Startups",
-    "Personal Development",
-    "Business & Finance",
-    "Education & Learning",
-    "Society & Culture",
-    "Gaming & Entertainment",
-    "Other",
-]
+DATA_DIR = Path(CONFIG.get("data_dir", "data"))
+CACHE_DIR = Path(CONFIG.get("cache_dir", "cache"))
+DEFAULT_MODEL = CONFIG.get("model", "gemma4:latest")
+TOPICS = CONFIG.get("topics", [])
 
 COLOR_MAP = {"Original Post": "#0A66C2", "Reshared Post": "#F5A623"}
 CATEGORY_ORDER = ["Original Post", "Reshared Post"]
@@ -56,6 +52,17 @@ def find_zip() -> Path | None:
         if not p.name.endswith(".zip.zip")
     )
     return zips[-1] if zips else None
+
+
+def extract_upload(uploaded_file) -> Path:
+    # Folder keeps the .zip name so find_zip()'s `Complete_*.zip` glob still matches it.
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    dest = DATA_DIR / uploaded_file.name
+    if dest.exists():
+        return dest
+    with zipfile.ZipFile(io.BytesIO(uploaded_file.getvalue())) as zf:
+        zf.extractall(dest)
+    return dest
 
 
 def safe_name(name: str) -> str:
@@ -290,6 +297,20 @@ def main() -> None:
 
         st.divider()
 
+        # ── Data upload ──────────────────────────────────────────────────────────
+        st.subheader("Data")
+        uploaded_zip = st.file_uploader(
+            "LinkedIn export (.zip)",
+            type="zip",
+            help=(
+                "Upload your Complete_LinkedInDataExport_*.zip. "
+                "Extracted into data/ on first upload; re-uploading the same "
+                "file reuses the existing extraction instead of unzipping again."
+            ),
+        )
+
+        st.divider()
+
         # ── Model selection ────────────────────────────────────────────────────
         st.subheader("LLM Model")
 
@@ -396,9 +417,20 @@ def main() -> None:
         )
 
     # ── Data ──────────────────────────────────────────────────────────────────
-    zip_file = find_zip()
+    zip_file = None
+    if uploaded_zip is not None:
+        with st.spinner("Preparing uploaded data…"):
+            zip_file = extract_upload(uploaded_zip)
     if zip_file is None:
-        st.error("No `Complete_*.zip` found in `data/` directory.")
+        zip_file = find_zip()
+    if zip_file is None:
+        st.error(
+            "No LinkedIn export found. Upload a `.zip` in the sidebar, "
+            "or place an extracted `Complete_*.zip` folder in `data/`."
+        )
+        return
+    if not (zip_file / "Shares.csv").exists():
+        st.error(f"`Shares.csv` not found in `{zip_file.name}` — is this a Complete export?")
         return
 
     with st.spinner("Loading Shares.csv…"):
@@ -507,15 +539,25 @@ def main() -> None:
         uncached = [i for i in range(len(df_posts)) if str(i) not in topic_cache]
         if uncached:
             st.info(f"Classifying {len(uncached)} uncached posts with **{active_model}**…")
+            print(f"[{active_model}] Starting topic classification for {len(uncached)} posts...")
             bar = st.progress(0, text="Starting…")
-            for idx, i in enumerate(uncached):
+            status = st.empty()
+            start_time = time.time()
+            for idx, i in tqdm(enumerate(uncached), total=len(uncached), desc="Classifying posts"):
+                t0 = time.time()
                 topic_cache[str(i)] = classify_topic(df_posts.iloc[i], active_model)
+                elapsed = time.time() - t0
+                status.text(f"Post {i}: {elapsed:.1f}s | Processing {idx + 1}/{len(uncached)}…")
+                print(f"  Post {i}: {elapsed:.1f}s")
                 if idx % 5 == 0 or idx == len(uncached) - 1:
                     save_cache(cp, topic_cache)
                 pct = (idx + 1) / len(uncached)
                 bar.progress(pct, text=f"Topic classification: {idx + 1}/{len(uncached)}")
             save_cache(cp, topic_cache)
+            total_time = time.time() - start_time
+            print(f"Done in {total_time:.1f}s")
             bar.empty()
+            status.empty()
 
         topic_labels = [topic_cache.get(str(i), "Other") for i in range(len(df_posts))]
         topic_counts = pd.Series(topic_labels).value_counts().reset_index()
@@ -547,15 +589,25 @@ def main() -> None:
         uncached = [i for i in range(len(df_orgs)) if str(i) not in company_cache]
         if uncached:
             st.info(f"Extracting companies from {len(uncached)} uncached posts with **{active_model}**…")
+            print(f"[{active_model}] Starting company extraction for {len(uncached)} posts...")
             bar = st.progress(0, text="Starting…")
-            for idx, i in enumerate(uncached):
+            status = st.empty()
+            start_time = time.time()
+            for idx, i in tqdm(enumerate(uncached), total=len(uncached), desc="Extracting companies"):
+                t0 = time.time()
                 company_cache[str(i)] = extract_companies(df_orgs.iloc[i], active_model)
+                elapsed = time.time() - t0
+                status.text(f"Post {i}: {elapsed:.1f}s | Processing {idx + 1}/{len(uncached)}…")
+                print(f"  Post {i}: {elapsed:.1f}s")
                 if idx % 5 == 0 or idx == len(uncached) - 1:
                     save_cache(cp, company_cache)
                 pct = (idx + 1) / len(uncached)
                 bar.progress(pct, text=f"Company extraction: {idx + 1}/{len(uncached)}")
             save_cache(cp, company_cache)
+            total_time = time.time() - start_time
+            print(f"Done in {total_time:.1f}s")
             bar.empty()
+            status.empty()
 
         org_counter: Counter = Counter()
         for orgs in company_cache.values():

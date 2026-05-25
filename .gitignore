@@ -12,11 +12,15 @@ wheels/
 # macOS
 .DS_Store
 
-# LinkedIn personal data exports
-data/
+# LinkedIn personal data exports (keep structure with .gitkeep)
+data/*
+!data/.gitkeep
 
 # Generated cache (rebuilt at runtime)
 cache/
+
+# Generated outputs
+outputs/
 
 # Claude settings
 .claude/

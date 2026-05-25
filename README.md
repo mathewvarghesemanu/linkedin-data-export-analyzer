@@ -7,8 +7,10 @@ Streamlit webapp that analyses your LinkedIn post history using local LLMs via O
 - **Monthly / Yearly charts** — stacked bar charts of posts over time, split by original vs reshared
 - **Word cloud** — frequency map of all post commentary text
 - **Technical terms cloud** — noun/proper-noun extraction via NLTK POS tagging
-- **Topic classification** — each post classified into one of 11 topic buckets (LLM, cached)
+- **Topic classification** — each post classified into one of 11 configurable topic buckets (LLM, cached)
 - **Company mentions** — top-30 organisations extracted from posts (LLM, cached)
+
+Model, data/cache locations, and topic buckets are all configurable via [config/settings.json](config/settings.json).
 
 ## Setup
 
@@ -32,13 +34,23 @@ uv sync
 
 This creates `.venv/` and installs all dependencies from `pyproject.toml`.
 
-### 3. Run the app
+### 3. Install and start Ollama
+
+Download from [ollama.com](https://ollama.com), then pull the model set in `config/settings.json` (default `gemma4:latest`):
+
+```bash
+ollama pull gemma4:latest
+```
+
+Any Ollama model works — change the `model` value in config, type a name in the app sidebar, or pull from the sidebar at runtime.
+
+### 4. Run the app
 
 ```bash
 uv run streamlit run webapp.py
 ```
 
-Requires [Ollama](https://ollama.com) running locally. Default model: `qwen2.5:14b`. Any Ollama model can be typed in or downloaded from the sidebar.
+Requires Ollama running locally. Default model: `gemma4:latest` (from `config/settings.json`). Any Ollama model can be typed in or downloaded from the sidebar.
 
 ## Web App
 
@@ -67,16 +79,31 @@ Opens at `http://localhost:8501` after `uv run streamlit run webapp.py`.
 
 LLM-backed panels (topic + companies) classify on first run then read from cache — subsequent loads are instant.
 
+## Configuration
+
+App settings live in [config/settings.json](config/settings.json):
+
+| Key | Description |
+|---|---|
+| `model` | Default Ollama model (e.g. `gemma4:latest`). Overridable from the sidebar. |
+| `data_dir` | Folder scanned for the LinkedIn export (default `data`) |
+| `cache_dir` | Folder for per-user LLM caches (default `cache`) |
+| `topics` | The topic buckets posts are classified into — edit this list to retune classification |
+
 ## Data
 
-Place your LinkedIn export in `data/`:
+Two ways to load your LinkedIn export:
+
+**Upload it (easiest):** drop the raw `Complete_LinkedInDataExport_*.zip` straight into the **Data** uploader in the sidebar. The app extracts it into `data/` on first upload and reuses that extraction on subsequent runs — re-uploading the same file won't unzip it again. (Streamlit caps uploads at 200 MB by default; complete exports are normally well under that.)
+
+**Place it manually:** drop an already-extracted export folder into `data/`:
 
 ```
 data/
 └── Complete_LinkedInDataExport_<date>.zip   ← extracted folder, not the .zip file
 ```
 
-The app reads `Shares.csv` from the most recent `Complete_*.zip` folder.
+Either way, the app reads `Shares.csv` from the most recent `Complete_*.zip` folder.
 
 ### Downloading Your LinkedIn Archive
 
@@ -89,7 +116,19 @@ The app reads `Shares.csv` from the most recent `Complete_*.zip` folder.
 ## Notebooks
 
 - [notebooks/main.ipynb](notebooks/main.ipynb) — exploratory analysis
-- [notebooks/vetting.ipynb](notebooks/vetting.ipynb) — vetting / filtering logic
+- [notebooks/writing_style.ipynb](notebooks/writing_style.ipynb) — profiles your writing voice from your original posts. Computes quantitative style metrics (length, sentence rhythm, paragraph structure, emoji/hashtag/question habits, vocabulary richness), visualizes the distributions, surfaces signature words and opening hooks, then uses the local Ollama model to synthesize a reusable style guide. Saves [outputs/writing_style.md](outputs/) and `outputs/writing_style_metrics.json`.
+
+### Stripping outputs from commits
+
+Notebook outputs are kept out of git via [nbstripout](https://github.com/kynan/nbstripout) (a dev dependency). A git clean filter strips cell outputs and execution counts when notebooks are staged, while leaving your working copy untouched. The filter is committed in [.gitattributes](.gitattributes), but git requires each clone to register it locally (one-time, per checkout):
+
+```bash
+git config filter.nbstripout.clean "uv run --no-sync nbstripout"
+git config filter.nbstripout.smudge cat
+git config filter.nbstripout.required true
+```
+
+After that, `git add`/`git commit` on any `*.ipynb` automatically drops outputs from what's committed.
 
 ## Caching
 

@@ -1,0 +1,18 @@
+{
+  "model": "gemma4:latest",
+  "data_dir": "data",
+  "cache_dir": "cache",
+  "topics": [
+    "Technology & Engineering",
+    "AI & Machine Learning",
+    "Career & Jobs",
+    "Leadership & Management",
+    "Entrepreneurship & Startups",
+    "Personal Development",
+    "Business & Finance",
+    "Education & Learning",
+    "Society & Culture",
+    "Gaming & Entertainment",
+    "Other"
+  ]
+}

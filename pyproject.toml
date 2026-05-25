@@ -16,5 +16,11 @@ dependencies = [
     "plotly>=6.7.0",
     "scikit-learn>=1.8.0",
     "streamlit>=1.57.0",
+    "tqdm>=4.67.3",
     "wordcloud>=1.9.6",
+]
+
+[dependency-groups]
+dev = [
+    "nbstripout>=0.9.1",
 ]
